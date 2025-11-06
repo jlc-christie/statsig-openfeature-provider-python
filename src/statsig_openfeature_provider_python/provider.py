@@ -8,7 +8,7 @@ from openfeature.provider import AbstractProvider, Metadata
 
 class StatsigProvider(AbstractProvider):
     def get_metadata(self) -> Metadata:
-        raise NotImplementedError
+        return Metadata(name="StatsigProvider")
 
     def resolve_boolean_details(
         self, flag_key: str,
