@@ -1,12 +1,39 @@
-from typing import Any, Mapping, Optional, Sequence, Union
+import json
+from json import JSONDecodeError
+from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
 from openfeature.evaluation_context import EvaluationContext
-from openfeature.exception import ProviderFatalError
+from openfeature.exception import ProviderFatalError, TypeMismatchError
 from openfeature.flag_evaluation import FlagResolutionDetails, FlagValueType, Reason
 from openfeature.provider import AbstractProvider, Metadata
 from statsig_python_core import Statsig, StatsigOptions, StatsigUser
 
 DEFAULT_TARGETING_KEY = "anonymous-user"
+
+
+def default_config_value_extractor(config: dict) -> FlagValueType:
+    """
+    Extracts an embedded value from the config returned as long as there is only one (key, value) pair in the returned
+    config. The key is irrelevant for this extractor.
+
+    Args:
+        config: the config that the value will be extracted from
+    Returns:
+        the value extracted from the config
+    """
+    values = list(config.values())
+    if len(values) != 1:
+        raise TypeMismatchError(
+            "multiple keys found in config which isn't compatible with the default config value extractor, you can "
+            "define your own config value extractor function and pass it in on provider initialization using the "
+            "config_value_extractor_func kwarg"
+        )
+
+    val = values[0]
+    if not isinstance(val, bool | int | float | str | Sequence | Mapping):
+        raise TypeMismatchError("type of value extracted from statsig config is not a valid FlagValueType")
+
+    return val
 
 
 class StatsigProvider(AbstractProvider):
@@ -16,6 +43,7 @@ class StatsigProvider(AbstractProvider):
         client_options: Optional[StatsigOptions] = None,
         client: Optional[Statsig] = None,
         default_targeting_key: Optional[str] = None,
+        config_value_extractor_func: Optional[Callable] = None,  # TODO: type of callable
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -47,6 +75,11 @@ class StatsigProvider(AbstractProvider):
 
         self._default_targeting_key = default_targeting_key if default_targeting_key else DEFAULT_TARGETING_KEY
 
+        if config_value_extractor_func:
+            self._config_value_extractor = config_value_extractor_func
+        else:
+            self._config_value_extractor = default_config_value_extractor
+
     def _get_statsig_user(self, evaluation_context: Optional[EvaluationContext] = None) -> StatsigUser:
         custom = dict(evaluation_context.attributes) if evaluation_context and evaluation_context.attributes else {}
 
@@ -58,6 +91,26 @@ class StatsigProvider(AbstractProvider):
             user = StatsigUser(self._default_targeting_key, custom=custom)  # type:ignore[arg-type]
 
         return user
+
+    def _get_embedded_dynamic_config_value(
+        self,
+        dynamic_config_id: str,
+        user: StatsigUser,
+    ) -> tuple[FlagValueType | None, Reason]:
+        config = self._client.get_dynamic_config(user, dynamic_config_id)
+
+        # no config found with statsig so it returned a default object value
+        if not config.rule_id:
+            return None, Reason.DEFAULT
+
+        try:
+            _ = json.dumps(config.value)
+        except JSONDecodeError as e:
+            raise TypeMismatchError("statsig returned a dynamic config value that isn't valid json") from e
+
+        val = self._config_value_extractor(config.value)
+
+        return val, Reason.TARGETING_MATCH
 
     def get_metadata(self) -> Metadata:
         return Metadata(name="StatsigProvider")
@@ -111,4 +164,27 @@ class StatsigProvider(AbstractProvider):
         default_value: Union[Sequence[FlagValueType], Mapping[str, FlagValueType]],
         evaluation_context: Optional[EvaluationContext] = None,
     ) -> FlagResolutionDetails[Union[Sequence[FlagValueType], Mapping[str, FlagValueType]]]:
-        raise NotImplementedError
+        user = self._get_statsig_user(evaluation_context=evaluation_context)
+        val, reason = self._get_embedded_dynamic_config_value(dynamic_config_id=flag_key, user=user)
+
+        if reason == Reason.DEFAULT:
+            return FlagResolutionDetails(
+                value=default_value,
+                error_code=None,
+                error_message=None,
+                reason=reason,
+                variant=None,
+                flag_metadata={},
+            )
+
+        if not isinstance(val, Sequence | Mapping) or isinstance(val, str):
+            raise TypeMismatchError("value extracted from dynamic config is not an object")
+
+        return FlagResolutionDetails(
+            value=val,
+            error_code=None,
+            error_message=None,
+            reason=reason,
+            variant=None,
+            flag_metadata={},
+        )

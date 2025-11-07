@@ -5,6 +5,7 @@ from unittest.mock import create_autospec
 import pytest
 import statsig_python_core
 from openfeature.evaluation_context import EvaluationContext
+from openfeature.exception import TypeMismatchError
 from openfeature.flag_evaluation import Reason
 
 import statsig_openfeature_provider_python
@@ -20,6 +21,11 @@ def mock_statsig_client() -> Generator[statsig_python_core.Statsig, None, None]:
 @pytest.fixture
 def mock_statsig_feature_gate() -> Generator[statsig_python_core.FeatureGate, None, None]:
     yield create_autospec(statsig_python_core.FeatureGate, instance=True)
+
+
+@pytest.fixture
+def mock_statsig_dynamic_config() -> Generator[statsig_python_core.DynamicConfig, None, None]:
+    yield create_autospec(statsig_python_core.DynamicConfig, instance=True)
 
 
 class TestStatsigProvider:
@@ -61,7 +67,51 @@ class TestStatsigProvider:
         mock_statsig_feature_gate.value = statsig_value
         mock_statsig_client.get_feature_gate.return_value = mock_statsig_feature_gate
         provider = StatsigProvider(client=mock_statsig_client)
-        resp = provider.resolve_boolean_details("foo", False, None)
+        resp = provider.resolve_boolean_details("some-rule-id", False, None)
 
         assert resp.value == statsig_value
         assert resp.reason == (Reason.TARGETING_MATCH if statsig_rule_id else Reason.DEFAULT)
+
+    @pytest.mark.parametrize(
+        "statsig_config_id,statsig_config_value,inner_value",
+        [
+            # config exists and returned valid array obj for user
+            ("some-config-id", {"foo": ["bar", "baz"]}, ["bar", "baz"]),
+            # config exists and returned valid dict obj for user
+            ("some-config-id", {"foo": {"bar": "baz"}}, {"bar": "baz"}),
+            # config exists and returned invalid obj for user
+            ("some-config-id", {"foo": "bar"}, None),
+            # config doesn't exist and returned default empty obj for user
+            (None, {}, None),
+        ],
+    )
+    def test_resolve_object_details(
+        self,
+        mock_statsig_client,
+        mock_statsig_dynamic_config,
+        statsig_config_id,
+        statsig_config_value,
+        inner_value,
+    ):
+        mock_statsig_dynamic_config.config_id = statsig_config_id
+        mock_statsig_dynamic_config.value = statsig_config_value
+        mock_statsig_client.get_dynamic_config.return_value = mock_statsig_dynamic_config
+        provider = StatsigProvider(client=mock_statsig_client)
+
+        if inner_value:
+            resp = provider.resolve_object_details("some-config-id", [], None)
+            assert resp.value == inner_value
+            assert resp.reason == (Reason.TARGETING_MATCH if statsig_config_id else Reason.DEFAULT)
+        else:
+            with pytest.raises(TypeMismatchError) as e:
+                _ = provider.resolve_object_details("some-config-id", [], None)
+
+            if statsig_config_id:
+                assert str(e.value) == "value extracted from dynamic config is not an object"
+            else:
+                assert (
+                    str(e.value)
+                    == "multiple keys found in config which isn't compatible with the default config value extractor, "
+                    "you can define your own config value extractor function and pass it in on provider "
+                    "initialization using the config_value_extractor_func kwarg"
+                )
