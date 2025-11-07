@@ -13,6 +13,14 @@ alternative fallback ID via the `default_targeting_key` arg of the constructor.
 
 # Usage
 
+## Install
+Package is available on PyPI as `statsig-openfeature-provider-python` so install with any package 
+manager, e.g. 
+
+```shell
+uv add statsig-openfeature-provider-python
+```
+
 ## Initialization
 You can initialize the client by either:
 1. Passing an `sdk_key` (optionally with some `client_options`)
