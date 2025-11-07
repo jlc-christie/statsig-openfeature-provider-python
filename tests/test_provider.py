@@ -1,7 +1,67 @@
+import itertools
+from typing import Generator
+from unittest.mock import create_autospec
+
+import pytest
+import statsig_python_core
+from openfeature.evaluation_context import EvaluationContext
+from openfeature.flag_evaluation import Reason
+
+import statsig_openfeature_provider_python
 from statsig_openfeature_provider_python import StatsigProvider
+from statsig_openfeature_provider_python.provider import DEFAULT_TARGETING_KEY
+
+
+@pytest.fixture(autouse=True)
+def mock_statsig_client() -> Generator[statsig_python_core.Statsig, None, None]:
+    yield create_autospec(statsig_python_core.Statsig, instance=True)
+
+
+@pytest.fixture
+def mock_statsig_feature_gate() -> Generator[statsig_python_core.FeatureGate, None, None]:
+    yield create_autospec(statsig_python_core.FeatureGate, instance=True)
 
 
 class TestStatsigProvider:
-    def test_get_metadata(self):
-        provider = StatsigProvider()
+    def test_get_metadata(self, mock_statsig_client):
+        provider = StatsigProvider(client=mock_statsig_client)
         assert provider.get_metadata().name == "StatsigProvider"
+
+    @pytest.mark.parametrize(
+        "targeting_key,attributes",
+        list(itertools.product(["some-targeting-key", None], [{"foo": "bar", "baz": "bux"}, None])),
+    )
+    def test__get_statsig_user(self, mock_statsig_client, targeting_key, attributes):
+        provider = StatsigProvider(client=mock_statsig_client)
+        context = EvaluationContext(
+            targeting_key=targeting_key,
+            attributes=attributes,
+        )
+        user = provider._get_statsig_user(evaluation_context=context)
+        assert user.user_id == (targeting_key if targeting_key else DEFAULT_TARGETING_KEY)
+        assert user.custom == (attributes if attributes else {})
+
+    def test__get_statsig_user_without_evaluation_context(self, mock_statsig_client):
+        provider = StatsigProvider(client=mock_statsig_client)
+        user = provider._get_statsig_user()
+        assert user.user_id == statsig_openfeature_provider_python.provider.DEFAULT_TARGETING_KEY
+
+    @pytest.mark.parametrize(
+        "statsig_rule_id,statsig_value",
+        [
+            ("some-rule-id", True),  # gate exists and returned True for user
+            ("some-rule-id", False),  # gate exists and returned False for user
+            (None, False),  # gate doesn't exist and returned False default
+        ],
+    )
+    def test_resolve_boolean_details(
+        self, mock_statsig_client, mock_statsig_feature_gate, statsig_rule_id, statsig_value
+    ):
+        mock_statsig_feature_gate.rule_id = statsig_rule_id
+        mock_statsig_feature_gate.value = statsig_value
+        mock_statsig_client.get_feature_gate.return_value = mock_statsig_feature_gate
+        provider = StatsigProvider(client=mock_statsig_client)
+        resp = provider.resolve_boolean_details("foo", False, None)
+
+        assert resp.value == statsig_value
+        assert resp.reason == (Reason.TARGETING_MATCH if statsig_rule_id else Reason.DEFAULT)
