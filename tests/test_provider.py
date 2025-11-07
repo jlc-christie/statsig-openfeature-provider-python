@@ -73,7 +73,7 @@ class TestStatsigProvider:
         assert resp.reason == (Reason.TARGETING_MATCH if statsig_rule_id else Reason.DEFAULT)
 
     @pytest.mark.parametrize(
-        "statsig_config_id,statsig_config_value,inner_value",
+        "statsig_config_id,statsig_config_value,expected_value",
         [
             # config exists and returned valid array obj for user
             ("some-config-id", {"foo": ["bar", "baz"]}, ["bar", "baz"]),
@@ -91,16 +91,16 @@ class TestStatsigProvider:
         mock_statsig_dynamic_config,
         statsig_config_id,
         statsig_config_value,
-        inner_value,
+        expected_value,
     ):
         mock_statsig_dynamic_config.config_id = statsig_config_id
         mock_statsig_dynamic_config.value = statsig_config_value
         mock_statsig_client.get_dynamic_config.return_value = mock_statsig_dynamic_config
         provider = StatsigProvider(client=mock_statsig_client)
 
-        if inner_value:
+        if expected_value:
             resp = provider.resolve_object_details("some-config-id", [], None)
-            assert resp.value == inner_value
+            assert resp.value == expected_value
             assert resp.reason == (Reason.TARGETING_MATCH if statsig_config_id else Reason.DEFAULT)
         else:
             with pytest.raises(TypeMismatchError) as e:
@@ -108,6 +108,50 @@ class TestStatsigProvider:
 
             if statsig_config_id:
                 assert str(e.value) == "value extracted from dynamic config is not an object"
+            else:
+                assert (
+                    str(e.value)
+                    == "multiple keys found in config which isn't compatible with the default config value extractor, "
+                    "you can define your own config value extractor function and pass it in on provider "
+                    "initialization using the config_value_extractor_func kwarg"
+                )
+
+    @pytest.mark.parametrize(
+        "statsig_config_id,statsig_config_value,expected_value",
+        [
+            # config exists and returned invalid array obj for user
+            ("some-config-id", {"foo": ["bar", "baz"]}, None),
+            # config exists and returned invalid dict obj for user
+            ("some-config-id", {"foo": {"bar": "baz"}}, None),
+            # config exists and returned valid string for user
+            ("some-config-id", {"foo": "bar"}, "bar"),
+            # config doesn't exist and returned default empty obj for user
+            (None, {}, None),
+        ],
+    )
+    def test_resolve_string_details(
+        self,
+        mock_statsig_client,
+        mock_statsig_dynamic_config,
+        statsig_config_id,
+        statsig_config_value,
+        expected_value,
+    ):
+        mock_statsig_dynamic_config.config_id = statsig_config_id
+        mock_statsig_dynamic_config.value = statsig_config_value
+        mock_statsig_client.get_dynamic_config.return_value = mock_statsig_dynamic_config
+        provider = StatsigProvider(client=mock_statsig_client)
+
+        if expected_value:
+            resp = provider.resolve_string_details("some-config-id", "foo", None)
+            assert resp.value == expected_value
+            assert resp.reason == (Reason.TARGETING_MATCH if statsig_config_id else Reason.DEFAULT)
+        else:
+            with pytest.raises(TypeMismatchError) as e:
+                _ = provider.resolve_string_details("some-config-id", "foo", None)
+
+            if statsig_config_id:
+                assert str(e.value) == "value extracted from dynamic config is not a string"
             else:
                 assert (
                     str(e.value)

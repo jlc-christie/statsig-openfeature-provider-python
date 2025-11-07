@@ -140,7 +140,30 @@ class StatsigProvider(AbstractProvider):
         default_value: str,
         evaluation_context: Optional[EvaluationContext] = None,
     ) -> FlagResolutionDetails[str]:
-        raise NotImplementedError
+        user = self._get_statsig_user(evaluation_context=evaluation_context)
+        val, reason = self._get_embedded_dynamic_config_value(dynamic_config_id=flag_key, user=user)
+
+        if reason == Reason.DEFAULT:
+            return FlagResolutionDetails(
+                value=default_value,
+                error_code=None,
+                error_message=None,
+                reason=reason,
+                variant=None,
+                flag_metadata={},
+            )
+
+        if not isinstance(val, str):
+            raise TypeMismatchError("value extracted from dynamic config is not a string")
+
+        return FlagResolutionDetails(
+            value=val,
+            error_code=None,
+            error_message=None,
+            reason=reason,
+            variant=None,
+            flag_metadata={},
+        )
 
     def resolve_integer_details(
         self,
