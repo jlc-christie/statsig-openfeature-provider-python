@@ -37,6 +37,18 @@ def default_config_value_extractor(config: dict) -> FlagValueType:
 
 
 class StatsigProvider(AbstractProvider):
+    """
+    An OpenFeature Provider for the Statsig service. Booleans are resolved by fetching Feature Gates and all other types
+    are resolved by fetching Dynamic Configs and extracting a value from the config. The `targeting_key` from the
+    `evaluation_context` is used as the `StatsigUser`s ID when fetching Feature Gates and Dynamic Config.
+
+    The way the value is extracted from
+    the config depends on the `config_value_extractor_func` used; if one is not provided at initialization then the
+    provider will fall back to using the `default_config_value_extractor` which will extract an embedded value from the
+    config regardless of the key used, e.g. using the default extractor with a config value like
+    `{"foo": {"123": "abc"}}` would result in `{"123": "abc"}` being returned from the extractor.
+    """
+
     def __init__(
         self,
         sdk_key: Optional[str] = None,
