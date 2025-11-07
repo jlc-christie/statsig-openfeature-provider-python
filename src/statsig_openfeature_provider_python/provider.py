@@ -55,7 +55,7 @@ class StatsigProvider(AbstractProvider):
         client_options: Optional[StatsigOptions] = None,
         client: Optional[Statsig] = None,
         default_targeting_key: Optional[str] = None,
-        config_value_extractor_func: Optional[Callable] = None,  # TODO: type of callable
+        config_value_extractor_func: Optional[Callable[[dict], FlagValueType]] = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
